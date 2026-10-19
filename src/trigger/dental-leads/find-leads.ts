@@ -16,9 +16,12 @@ export const findDentalLeads = schedules.task({
   run: async (payload) => {
     const source = process.env.LEAD_SOURCE;
     if (!source) throw new Error("LEAD_SOURCE is not set (use \"mock\" or \"google\")");
+    const resendApiKey = process.env.RESEND_API_KEY;
+    if (!resendApiKey) throw new Error("RESEND_API_KEY is not set");
 
     // new Date() also handles test runs, where the timestamp arrives as an ISO string
-    const city = cityForDate(new Date(payload.timestamp));
+    const runDate = new Date(payload.timestamp);
+    const city = cityForDate(runDate);
     logger.info(`This week's city: ${city.name}, ${city.country}`);
 
     const practices = await findPractices(city, source);
@@ -39,7 +42,11 @@ export const findDentalLeads = schedules.task({
     leads.sort((a, b) => b.score - a.score || (b.reviewCount ?? 0) - (a.reviewCount ?? 0));
     const top = leads.slice(0, MAX_LEADS);
 
-    await sendEmail(buildEmail(city, top));
+    const emailId = await sendEmail(
+      buildEmail(city, top),
+      resendApiKey,
+      `dental-leads-${city.name}-${runDate.toISOString()}`,
+    );
 
     return {
       city: city.name,
@@ -48,6 +55,7 @@ export const findDentalLeads = schedules.task({
       sent: top.length,
       noWebsite: top.filter((l) => l.verdict.status === "none").length,
       weakWebsite: top.filter((l) => l.verdict.status === "weak").length,
+      emailId,
     };
   },
 });

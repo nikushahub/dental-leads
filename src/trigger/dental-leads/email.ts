@@ -53,9 +53,36 @@ ${rows}
   return { subject, text, html };
 }
 
-// Mock delivery: prints the email to the run logs. Swap for a real sender (e.g. Resend) later.
-export async function sendEmail(email: Email): Promise<void> {
-  logger.info(`📧 MOCK EMAIL — ${email.subject}\n\n${email.text}`, { html: email.html });
+const EMAIL_TO = "nikagremelashvili@gmail.com";
+// Resend's shared test sender — works without a domain, but can only deliver to the
+// email address your Resend account was created with. Verify a domain in Resend to change it.
+const EMAIL_FROM = "Dental Leads <onboarding@resend.dev>";
+
+// Sends via Resend: https://resend.com/docs/api-reference/emails/send-email
+// idempotencyKey stops a task retry from sending the same email twice (Resend keeps it 24h).
+export async function sendEmail(email: Email, apiKey: string, idempotencyKey: string): Promise<string> {
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({
+      from: EMAIL_FROM,
+      to: [EMAIL_TO],
+      subject: email.subject,
+      html: email.html,
+      text: email.text,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Resend failed to send email (${res.status}): ${await res.text()}`);
+  }
+
+  const { id } = (await res.json()) as { id: string };
+  logger.info(`📧 Email sent — ${email.subject}`, { resendId: id });
+  return id;
 }
 
 function escape(s: string): string {

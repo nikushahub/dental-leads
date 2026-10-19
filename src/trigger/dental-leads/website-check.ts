@@ -21,6 +21,9 @@ export async function checkWebsite(url: string | undefined): Promise<WebsiteVerd
     return { status: "weak", reasons: ["Website doesn't load"] };
   }
 
+  // 401/403/429 usually mean bot protection (e.g. Cloudflare) blocked our check, not a broken
+  // site — skip rather than wrongly flag it
+  if ([401, 403, 429].includes(res.status)) return { status: "good", reasons: [] };
   if (!res.ok) return { status: "weak", reasons: [`Website returns an error (${res.status})`] };
 
   const reasons: string[] = [];
