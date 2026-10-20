@@ -7,6 +7,10 @@ export type Lead = Practice & { verdict: WebsiteVerdict; score: number };
 
 export type Email = { subject: string; text: string; html: string };
 
+// OpenStreetMap is volunteer-maintained and often missing websites, so "no website" needs a check
+const SOURCE_NOTE =
+  "Source: OpenStreetMap. 'No website listed' means none is on the map — search the practice name quickly before calling.";
+
 export function buildEmail(city: City, leads: Lead[]): Email {
   if (leads.length === 0) {
     const subject = `🦷 No new dental leads in ${city.name} this week`;
@@ -16,16 +20,15 @@ export function buildEmail(city: City, leads: Lead[]): Email {
 
   const subject = `🦷 ${leads.length} dental leads in ${city.name}`;
 
-  const text = leads
+  const text = `${SOURCE_NOTE}\n\n` + leads
     .map((l, i) =>
       [
         `${i + 1}. ${l.verdict.status === "none" ? "🔥" : "⚠️"} ${l.name}`,
         `   Why: ${l.verdict.reasons.join("; ")}`,
         `   Phone: ${l.phone ?? "—"}`,
         `   Address: ${l.address}`,
-        `   Website: ${l.website ?? "none"}`,
-        `   Rating: ${l.rating ?? "—"} (${l.reviewCount ?? 0} reviews)`,
-        `   Maps: ${l.mapsUrl ?? "—"}`,
+        `   Website: ${l.website ?? "none listed"}`,
+        `   Map: ${l.mapUrl ?? "—"}`,
       ].join("\n"),
     )
     .join("\n\n");
@@ -33,20 +36,20 @@ export function buildEmail(city: City, leads: Lead[]): Email {
   const rows = leads
     .map(
       (l) => `<tr>
-  <td>${l.verdict.status === "none" ? "🔥" : "⚠️"} ${l.mapsUrl ? `<a href="${escape(l.mapsUrl)}">${escape(l.name)}</a>` : escape(l.name)}</td>
+  <td>${l.verdict.status === "none" ? "🔥" : "⚠️"} ${l.mapUrl ? `<a href="${escape(l.mapUrl)}">${escape(l.name)}</a>` : escape(l.name)}</td>
   <td>${escape(l.verdict.reasons.join("; "))}</td>
   <td>${escape(l.phone ?? "—")}</td>
   <td>${escape(l.address)}</td>
-  <td>${l.website ? `<a href="${escape(l.website)}">${escape(l.website)}</a>` : "none"}</td>
-  <td>${l.rating ?? "—"} (${l.reviewCount ?? 0})</td>
+  <td>${l.website ? `<a href="${escape(l.website)}">${escape(l.website)}</a>` : "none listed"}</td>
 </tr>`,
     )
     .join("\n");
 
   const html = `<h2>${escape(subject)}</h2>
-<p>🔥 = no website &nbsp; ⚠️ = weak website</p>
+<p>🔥 = no website listed &nbsp; ⚠️ = weak website</p>
+<p><em>${escape(SOURCE_NOTE)}</em></p>
 <table border="1" cellpadding="6" cellspacing="0">
-<tr><th>Practice</th><th>Why it's a lead</th><th>Phone</th><th>Address</th><th>Website</th><th>Rating</th></tr>
+<tr><th>Practice</th><th>Why it's a lead</th><th>Phone</th><th>Address</th><th>Website</th></tr>
 ${rows}
 </table>`;
 

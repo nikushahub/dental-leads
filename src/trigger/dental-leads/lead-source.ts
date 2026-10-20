@@ -7,15 +7,13 @@ export type Practice = {
   address: string;
   phone?: string;
   website?: string;
-  rating?: number;
-  reviewCount?: number;
-  mapsUrl?: string;
+  mapUrl?: string;
 };
 
 export async function findPractices(city: City, source: string): Promise<Practice[]> {
   if (source === "mock") return mockPractices(city);
-  if (source === "google") return googlePractices(city);
-  throw new Error(`Unknown LEAD_SOURCE "${source}" — use "mock" or "google"`);
+  if (source === "osm") return osmPractices(city);
+  throw new Error(`Unknown LEAD_SOURCE "${source}" — use "mock" or "osm"`);
 }
 
 // ─── Mock source ─────────────────────────────────────────────────────────────
@@ -23,14 +21,14 @@ export async function findPractices(city: City, source: string): Promise<Practic
 // every outcome: no site, http-only (no HTTPS), unreachable, and a modern site.
 
 const MOCK_TEMPLATES: Omit<Practice, "id" | "address">[] = [
-  { name: "Smile Dental Clinic", phone: "+995 555 10 20 30", rating: 4.8, reviewCount: 212 },
-  { name: "Family Dentistry", phone: "+995 555 11 22 33", rating: 4.5, reviewCount: 87 },
-  { name: "White Tooth Studio", phone: "+995 555 12 34 56", website: "http://example.com", rating: 4.6, reviewCount: 140 },
-  { name: "DentaPlus", phone: "+995 555 98 76 54", website: "https://dentaplus-clinic.invalid", rating: 4.2, reviewCount: 45 },
-  { name: "Orthodontic Center", phone: "+995 555 44 55 66", rating: 4.9, reviewCount: 301 },
-  { name: "Modern Dental Care", phone: "+995 555 77 88 99", website: "https://trigger.dev", rating: 4.7, reviewCount: 98 },
-  { name: "Dr. Beridze Dental Office", phone: "+995 555 21 43 65", rating: 4.3, reviewCount: 19 },
-  { name: "Bright Smile Implants", phone: "+995 555 31 41 59", website: "http://example.org", rating: 4.4, reviewCount: 63 },
+  { name: "Smile Dental Clinic", phone: "+995 555 10 20 30" },
+  { name: "Family Dentistry", phone: "+995 555 11 22 33" },
+  { name: "White Tooth Studio", phone: "+995 555 12 34 56", website: "http://example.com" },
+  { name: "DentaPlus", phone: "+995 555 98 76 54", website: "https://dentaplus-clinic.invalid" },
+  { name: "Orthodontic Center" },
+  { name: "Modern Dental Care", phone: "+995 555 77 88 99", website: "https://trigger.dev" },
+  { name: "Dr. Beridze Dental Office" },
+  { name: "Bright Smile Implants", website: "http://example.org" },
 ];
 
 function mockPractices(city: City): Practice[] {
@@ -40,83 +38,92 @@ function mockPractices(city: City): Practice[] {
     id: `mock-${city.name.toLowerCase()}-${i}`,
     name: `${t.name} ${city.name}`,
     address: `${10 + i * 7} Rustaveli St, ${city.name}, ${city.country}`,
-    mapsUrl: `https://maps.google.com/?q=${encodeURIComponent(`${t.name} ${city.name}`)}`,
   }));
 }
 
-// ─── Google Places API (New) — Text Search ───────────────────────────────────
-// Docs: https://developers.google.com/maps/documentation/places/web-service/text-search
+// ─── OpenStreetMap via the Overpass API ──────────────────────────────────────
+// Free, no API key. Usage policy: identify yourself with a User-Agent and keep volume low
+// (this runs one query per week). Docs: https://wiki.openstreetmap.org/wiki/Overpass_API
 
-const FIELD_MASK = [
-  "places.id",
-  "places.displayName",
-  "places.formattedAddress",
-  "places.internationalPhoneNumber",
-  "places.websiteUri",
-  "places.rating",
-  "places.userRatingCount",
-  "places.googleMapsUri",
-  "nextPageToken",
-].join(",");
+// Public servers, tried in order — any of them can be busy at a given moment
+const OVERPASS_SERVERS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+];
+const SERVER_TIMEOUT_MS = 75_000;
 
-const MAX_PAGES = 3; // 20 results per page → up to 60 practices per city
-
-type GooglePlace = {
-  id: string;
-  displayName?: { text: string };
-  formattedAddress?: string;
-  internationalPhoneNumber?: string;
-  websiteUri?: string;
-  rating?: number;
-  userRatingCount?: number;
-  googleMapsUri?: string;
+type OsmElement = {
+  type: "node" | "way" | "relation";
+  id: number;
+  tags?: Record<string, string>;
 };
 
-async function googlePractices(city: City): Promise<Practice[]> {
-  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
-  if (!apiKey) throw new Error("GOOGLE_PLACES_API_KEY is not set (required when LEAD_SOURCE=google)");
+async function osmPractices(city: City): Promise<Practice[]> {
+  const around = `around:${city.radiusKm * 1000},${city.lat},${city.lon}`;
+  const query = `[out:json][timeout:60];
+(
+  nwr["amenity"="dentist"](${around});
+  nwr["healthcare"="dentist"](${around});
+);
+out tags;`;
+
+  const elements = await queryOverpass(query);
 
   const practices: Practice[] = [];
-  let pageToken: string | undefined;
+  for (const el of elements) {
+    const tags = el.tags ?? {};
+    const name = tags["name:en"] ?? tags.name;
+    if (!name) continue; // an unnamed pin isn't a usable lead
 
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": apiKey,
-        "X-Goog-FieldMask": FIELD_MASK,
-      },
-      body: JSON.stringify({
-        textQuery: `dentist in ${city.name}, ${city.country}`,
-        regionCode: city.regionCode,
-        languageCode: city.languageCode ?? "en",
-        pageSize: 20,
-        pageToken,
-      }),
+    const street = [tags["addr:street"], tags["addr:housenumber"]].filter(Boolean).join(" ");
+    const website = tags.website ?? tags["contact:website"] ?? tags.url;
+
+    practices.push({
+      id: `${el.type}/${el.id}`,
+      name,
+      address: [street, city.name, city.country].filter(Boolean).join(", "),
+      phone: tags.phone ?? tags["contact:phone"] ?? tags["contact:mobile"],
+      // Many OSM entries omit the scheme ("www.clinic.ge"); http:// redirects to https if supported
+      website: website && !/^https?:\/\//i.test(website) ? `http://${website}` : website,
+      mapUrl: `https://www.openstreetmap.org/${el.type}/${el.id}`,
     });
-    if (!res.ok) {
-      throw new Error(`Google Places search failed (${res.status}): ${await res.text()}`);
-    }
-
-    const data = (await res.json()) as { places?: GooglePlace[]; nextPageToken?: string };
-    for (const p of data.places ?? []) {
-      practices.push({
-        id: p.id,
-        name: p.displayName?.text ?? "Unknown practice",
-        address: p.formattedAddress ?? "",
-        phone: p.internationalPhoneNumber,
-        website: p.websiteUri,
-        rating: p.rating,
-        reviewCount: p.userRatingCount,
-        mapsUrl: p.googleMapsUri,
-      });
-    }
-
-    pageToken = data.nextPageToken;
-    if (!pageToken) break;
   }
 
-  logger.info(`Google Places returned ${practices.length} practices in ${city.name}`);
+  logger.info(`OpenStreetMap returned ${practices.length} named practices in ${city.name}`, {
+    withPhone: practices.filter((p) => p.phone).length,
+    withWebsite: practices.filter((p) => p.website).length,
+  });
   return practices;
+}
+
+async function queryOverpass(query: string): Promise<OsmElement[]> {
+  const failures: string[] = [];
+
+  for (const server of OVERPASS_SERVERS) {
+    const host = new URL(server).host;
+    try {
+      const res = await fetch(server, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "dental-leads/1.0 (Trigger.dev automation)",
+        },
+        body: `data=${encodeURIComponent(query)}`,
+        signal: AbortSignal.timeout(SERVER_TIMEOUT_MS),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const { elements } = (await res.json()) as { elements: OsmElement[] };
+      logger.info(`Overpass query answered by ${host}`);
+      return elements;
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      logger.warn(`Overpass server ${host} failed (${reason}) — trying the next one`);
+      failures.push(`${host}: ${reason}`);
+    }
+  }
+
+  // Every server busy — throwing lets Trigger.dev retry the whole run later
+  throw new Error(`All Overpass servers failed — ${failures.join("; ")}`);
 }

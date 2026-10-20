@@ -1,18 +1,20 @@
 export type City = {
   name: string;
-  country: string; // used in the search text, e.g. "dentist in Batumi, Georgia"
-  regionCode: string; // ISO 3166-1 alpha-2, biases Google results to that country
-  languageCode?: string; // language for returned names/addresses (default "en")
+  country: string;
+  // Search circle — practices within radiusKm of this point. Find coordinates by
+  // right-clicking the city centre on openstreetmap.org → "Show address".
+  lat: number;
+  lon: number;
+  radiusKm: number;
 };
 
 // The rotation — one city per week, in this order. Add any city in the world here.
 export const CITIES: City[] = [
-  { name: "Tbilisi", country: "Georgia", regionCode: "GE" },
-  { name: "Batumi", country: "Georgia", regionCode: "GE" },
-  { name: "Kutaisi", country: "Georgia", regionCode: "GE" },
-  { name: "Rustavi", country: "Georgia", regionCode: "GE" },
-  // { name: "Berlin", country: "Germany", regionCode: "DE" },
-  // { name: "Austin, TX", country: "USA", regionCode: "US" },
+  { name: "Tbilisi", country: "Georgia", lat: 41.7151, lon: 44.8271, radiusKm: 12 },
+  { name: "Batumi", country: "Georgia", lat: 41.6168, lon: 41.6367, radiusKm: 8 },
+  { name: "Kutaisi", country: "Georgia", lat: 42.2679, lon: 42.6946, radiusKm: 6 },
+  { name: "Rustavi", country: "Georgia", lat: 41.5495, lon: 44.9932, radiusKm: 6 },
+  // { name: "Berlin", country: "Germany", lat: 52.52, lon: 13.405, radiusKm: 15 },
 ];
 
 const DAY_MS = 24 * 60 * 60 * 1000;

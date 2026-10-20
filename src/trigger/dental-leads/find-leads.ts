@@ -5,6 +5,9 @@ import { findPractices } from "./lead-source";
 import { checkWebsite } from "./website-check";
 
 const MAX_LEADS = 20;
+// Slots kept for practices with a real but weak website — verified leads, unlike
+// "no website listed", which is often just missing from OpenStreetMap
+const WEAK_SITE_SLOTS = 10;
 const CHECKS_AT_ONCE = 10; // how many websites to check in parallel
 
 export const findDentalLeads = schedules.task({
@@ -13,9 +16,17 @@ export const findDentalLeads = schedules.task({
     pattern: "0 8 * * 1", // every Monday at 8:00
     timezone: "Asia/Tbilisi",
   },
+  // Public map servers can be busy for a while — space retries out over ~15 minutes
+  retry: {
+    maxAttempts: 5,
+    factor: 2,
+    minTimeoutInMs: 60_000,
+    maxTimeoutInMs: 8 * 60_000,
+  },
+  maxDuration: 600, // up to 3 servers × 75s, plus website checks
   run: async (payload) => {
     const source = process.env.LEAD_SOURCE;
-    if (!source) throw new Error("LEAD_SOURCE is not set (use \"mock\" or \"google\")");
+    if (!source) throw new Error("LEAD_SOURCE is not set (use \"osm\" or \"mock\")");
     const resendApiKey = process.env.RESEND_API_KEY;
     if (!resendApiKey) throw new Error("RESEND_API_KEY is not set");
 
@@ -38,9 +49,18 @@ export const findDentalLeads = schedules.task({
       });
     }
 
-    // Hottest first; among equals, busier practices (more reviews) are better prospects
-    leads.sort((a, b) => b.score - a.score || (b.reviewCount ?? 0) - (a.reviewCount ?? 0));
-    const top = leads.slice(0, MAX_LEADS);
+    // Within each group: practices with a phone number first (they can be called), then
+    // the most website problems first
+    const byPriority = (a: Lead, b: Lead) =>
+      Number(!!b.phone) - Number(!!a.phone) || b.score - a.score;
+    const weak = leads.filter((l) => l.verdict.status === "weak").sort(byPriority);
+    const none = leads.filter((l) => l.verdict.status === "none").sort(byPriority);
+
+    // Up to WEAK_SITE_SLOTS weak-site leads; any unused slots go to no-website leads, and
+    // vice versa if there aren't enough no-website leads
+    const weakPicked = weak.slice(0, Math.max(WEAK_SITE_SLOTS, MAX_LEADS - none.length));
+    const nonePicked = none.slice(0, MAX_LEADS - weakPicked.length);
+    const top = [...weakPicked, ...nonePicked];
 
     const emailId = await sendEmail(
       buildEmail(city, top),
